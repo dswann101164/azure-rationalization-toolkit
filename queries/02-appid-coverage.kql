@@ -1,0 +1,78 @@
+// ========================================
+// APPID COVERAGE BY SUBSCRIPTION
+// ========================================
+// Purpose: Calculate tagging compliance percentage across subscriptions
+// Use Case: Executive dashboards, compliance reporting, trend tracking
+// Output: Subscription-level compliance scores
+//
+// Usage: Run monthly to track improvement over time
+// ========================================
+
+Resources
+| extend HasAppID = iff(tags has "AppID", "Tagged", "Untagged")
+| summarize 
+    TotalResources = count(),
+    TaggedResources = countif(HasAppID == "Tagged"),
+    UntaggedResources = countif(HasAppID == "Untagged")
+by subscriptionId
+| extend CompliancePercent = round((TaggedResources * 100.0) / TotalResources, 2)
+| project 
+    SubscriptionId = subscriptionId,
+    TotalResources,
+    TaggedResources,
+    UntaggedResources,
+    CompliancePercent,
+    ComplianceStatus = case(
+        CompliancePercent >= 95, "Excellent",
+        CompliancePercent >= 85, "Good",
+        CompliancePercent >= 70, "Needs Work",
+        "Critical"
+    )
+| order by CompliancePercent asc
+
+// ========================================
+// INTERPRETATION GUIDE
+// ========================================
+// Target: 95%+ compliance (allows for Azure-managed resources)
+// "Critical" subscriptions (<70%) = likely new or ungoverned
+// Use this to prioritize remediation efforts
+//
+// TREND TRACKING:
+// Export monthly and compare:
+// - Are subscriptions improving?
+// - Are new subscriptions starting compliant?
+// - Which teams need training?
+// ========================================
+
+// ========================================
+// ADVANCED: Coverage by Resource Type
+// ========================================
+// Shows which resource types are least compliant
+/*
+Resources
+| extend HasAppID = iff(tags has "AppID", "Tagged", "Untagged")
+| summarize 
+    Total = count(),
+    Tagged = countif(HasAppID == "Tagged")
+by type
+| extend CompliancePercent = round((Tagged * 100.0) / Total, 2)
+| where Total > 10  // Filter out rare resource types
+| order by CompliancePercent asc, Total desc
+*/
+
+// ========================================
+// ADVANCED: Coverage Trend Over Time
+// ========================================
+// Requires running query weekly and storing results
+// Example visualization: Line chart of CompliancePercent over time
+/*
+Resources
+| extend HasAppID = iff(tags has "AppID", "Tagged", "Untagged")
+| extend SnapshotDate = now()
+| summarize 
+    TaggedResources = countif(HasAppID == "Tagged"),
+    TotalResources = count()
+by subscriptionId, SnapshotDate
+| extend CompliancePercent = round((TaggedResources * 100.0) / TotalResources, 2)
+| project SnapshotDate, subscriptionId, CompliancePercent
+*/

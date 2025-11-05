@@ -1,0 +1,110 @@
+// ========================================
+// RESOURCE DISTRIBUTION BY APPID
+// ========================================
+// Purpose: Understand application footprint across Azure
+// Use Case: Capacity planning, architecture review, security assessment
+// Output: Resource counts and types per application
+// ========================================
+
+Resources
+| extend AppID = tostring(tags.AppID)
+| where isnotempty(AppID)
+| summarize 
+    TotalResources = count(),
+    ResourceTypes = make_set(type),
+    Subscriptions = make_set(subscriptionId),
+    Locations = make_set(location),
+    ResourceGroups = make_set(resourceGroup)
+by AppID
+| extend 
+    TypeCount = array_length(ResourceTypes),
+    SubscriptionCount = array_length(Subscriptions),
+    LocationCount = array_length(Locations),
+    ResourceGroupCount = array_length(ResourceGroups)
+| project 
+    AppID,
+    TotalResources,
+    TypeCount,
+    SubscriptionCount,
+    LocationCount,
+    ResourceGroupCount,
+    ResourceTypes,
+    Locations
+| order by TotalResources desc
+
+// ========================================
+// INTERPRETATION GUIDE
+// ========================================
+// SIMPLE APPLICATIONS:
+// - Low resource count (<20)
+// - Single subscription, single location
+// - 2-5 resource types (VM, disk, NIC, NSG, etc.)
+// - Example: Small web app
+//
+// COMPLEX APPLICATIONS:
+// - High resource count (100+)
+// - Multi-subscription, multi-region
+// - 10+ resource types
+// - Example: Global e-commerce platform
+//
+// RED FLAGS:
+// - 1 AppID spanning 10+ subscriptions → scope creep or misuse
+// - 1 AppID in 5+ regions → potential cost optimization opportunity
+// - 500+ resources under 1 AppID → need to break into sub-components
+// ========================================
+
+// ========================================
+// ADVANCED: Application Complexity Score
+// ========================================
+// Assigns a complexity score based on resource footprint
+/*
+Resources
+| extend AppID = tostring(tags.AppID)
+| where isnotempty(AppID)
+| summarize 
+    TotalResources = count(),
+    TypeCount = dcount(type),
+    SubscriptionCount = dcount(subscriptionId),
+    LocationCount = dcount(location)
+by AppID
+| extend ComplexityScore = (TotalResources / 10.0) + (TypeCount * 2) + (SubscriptionCount * 5) + (LocationCount * 3)
+| extend ComplexityTier = case(
+    ComplexityScore > 100, "Enterprise",
+    ComplexityScore > 50, "Advanced",
+    ComplexityScore > 20, "Standard",
+    "Simple"
+)
+| order by ComplexityScore desc
+*/
+
+// ========================================
+// ADVANCED: Resource Type Breakdown
+// ========================================
+// Shows top resource types per application
+/*
+Resources
+| extend AppID = tostring(tags.AppID)
+| where isnotempty(AppID)
+| summarize ResourceCount = count() by AppID, type
+| order by AppID, ResourceCount desc
+| serialize
+| extend Rank = row_number(1, prev(AppID) != AppID)
+| where Rank <= 5  // Top 5 resource types per AppID
+| project AppID, type, ResourceCount, Rank
+*/
+
+// ========================================
+// USE CASE: Architecture Review
+// ========================================
+// Use this query during:
+// - Annual architecture audits
+// - Migration planning (on-prem to Azure)
+// - Disaster recovery planning
+// - Cost optimization reviews
+//
+// Questions to ask:
+// - Why does this app span 4 subscriptions?
+// - Is multi-region required or accidental?
+// - Can we consolidate resource groups?
+// - Are all these resource types necessary?
+// ========================================

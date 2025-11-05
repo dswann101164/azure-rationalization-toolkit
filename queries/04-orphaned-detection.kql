@@ -1,0 +1,186 @@
+// ========================================
+// ORPHANED RESOURCE DETECTION
+// ========================================
+// Purpose: Find resources tagged with AppIDs that no longer exist
+// Use Case: Post-decommission cleanup, cost reduction, security posture
+// Warning: Requires maintaining a list of active AppIDs
+//
+// DEFINITION OF "ORPHANED":
+// - Resource has an AppID tag
+// - But that AppID is not in the approved AppID registry
+// - Indicates: application was decommissioned but resources left behind
+// ========================================
+
+// ========================================
+// PREREQUISITE: Define Your Active AppID List
+// ========================================
+// Replace this with your organization's active AppID values
+// Source: CMDB, ServiceNow, or master spreadsheet
+let ActiveAppIDs = dynamic([
+    "CORP-ERP-001",
+    "CORP-CRM-002",
+    "CORP-HR-003",
+    "DEPT-FINANCE-001",
+    "DEPT-SALES-001"
+    // Add all your active AppIDs here
+]);
+// ========================================
+
+Resources
+| extend AppID = tostring(tags.AppID)
+| where isnotempty(AppID)
+| where AppID !in (ActiveAppIDs)
+| extend 
+    ResourceType = tostring(type),
+    ResourceName = tostring(name),
+    ResourceGroup = tostring(resourceGroup),
+    SubscriptionId = tostring(subscriptionId),
+    Location = tostring(location),
+    CreatedDate = tostring(properties.createdTime)
+| project 
+    AppID,
+    ResourceType,
+    ResourceName,
+    ResourceGroup,
+    SubscriptionId,
+    Location,
+    CreatedDate,
+    ResourceId = id
+| order by AppID, ResourceType, ResourceName
+
+// ========================================
+// INTERPRETATION GUIDE
+// ========================================
+// SCENARIO 1: Small number of resources (<10)
+// → Likely cleanup oversight, safe to delete after validation
+//
+// SCENARIO 2: Large clusters (50+ resources)
+// → Entire application decommissioned but infrastructure left running
+// → HIGH PRIORITY: Potential significant cost savings
+//
+// SCENARIO 3: Resources across multiple subscriptions
+// → Application had dependencies, need cross-team coordination
+//
+// RED FLAGS:
+// - Orphaned VMs still running (check power state)
+// - Orphaned storage accounts (check if data is needed)
+// - Orphaned databases (validate backup requirements)
+// ========================================
+
+// ========================================
+// ADVANCED: Orphaned Resources with Cost Impact
+// ========================================
+// Shows which orphaned AppIDs are costing the most money
+/*
+Resources
+| extend AppID = tostring(tags.AppID)
+| where isnotempty(AppID)
+| where AppID !in (ActiveAppIDs)
+| join kind=leftouter (
+    CostManagementResources
+    | where type == "microsoft.costmanagement/query"
+    | extend 
+        ResourceId = tostring(properties.resourceId),
+        Cost = todecimal(properties.cost)
+) on $left.id == $right.ResourceId
+| summarize 
+    OrphanedResourceCount = count(),
+    MonthlyCost = sum(Cost)
+by AppID
+| order by MonthlyCost desc
+| extend 
+    MonthlyCostFormatted = strcat("$", format_number(MonthlyCost, 0)),
+    AnnualizedCost = strcat("$", format_number(MonthlyCost * 12, 0))
+*/
+
+// ========================================
+// ADVANCED: Orphaned Resources by Age
+// ========================================
+// Find how long orphaned resources have been running
+/*
+Resources
+| extend AppID = tostring(tags.AppID)
+| where isnotempty(AppID)
+| where AppID !in (ActiveAppIDs)
+| extend 
+    CreatedDate = todatetime(properties.createdTime),
+    DaysRunning = datetime_diff('day', now(), todatetime(properties.createdTime))
+| where isnotempty(CreatedDate)
+| summarize 
+    ResourceCount = count(),
+    AvgDaysRunning = avg(DaysRunning),
+    MaxDaysRunning = max(DaysRunning)
+by AppID
+| order by MaxDaysRunning desc
+| extend 
+    Status = case(
+        MaxDaysRunning > 365, "Ancient (1+ year)",
+        MaxDaysRunning > 180, "Old (6+ months)",
+        MaxDaysRunning > 90, "Stale (3+ months)",
+        "Recent"
+    )
+*/
+
+// ========================================
+// SAFE DELETION WORKFLOW
+// ========================================
+// DO NOT delete resources immediately!
+//
+// STEP 1: Validate with stakeholders
+// - Send email to tagged Owner (if tag exists)
+// - Check with platform team
+// - Review audit logs for recent activity
+//
+// STEP 2: Soft delete (add "MarkedForDeletion" tag)
+// az resource tag --ids <resource-id> --tags MarkedForDeletion="2025-12-31"
+//
+// STEP 3: Wait 30 days
+// - Monitor for any access attempts
+// - Check if anyone complains
+//
+// STEP 4: Hard delete
+// az resource delete --ids <resource-id>
+//
+// STEP 5: Document in wiki
+// - What was deleted
+// - Who approved
+// - Cost savings achieved
+// ========================================
+
+// ========================================
+// REAL-WORLD EXAMPLE
+// ========================================
+// In a 44-subscription environment:
+// - 12 orphaned AppIDs discovered
+// - 342 resources affected
+// - $14,300/month in wasted spend
+// - 6 months to safely decommission (coordination, validation, deletion)
+//
+// LESSON LEARNED:
+// Prevention > Cleanup
+// → Enforce AppID validation at resource creation time
+// → Integrate with CMDB/ServiceNow for real-time validation
+// ========================================
+
+// ========================================
+// ALTERNATIVE: No AppID Registry?
+// ========================================
+// If you don't have a master AppID list, use this heuristic:
+// "If AppID appears on <5 resources, it's likely orphaned"
+/*
+Resources
+| extend AppID = tostring(tags.AppID)
+| where isnotempty(AppID)
+| summarize ResourceCount = count() by AppID
+| where ResourceCount < 5
+| join kind=inner (
+    Resources
+    | extend AppID = tostring(tags.AppID)
+) on AppID
+| project 
+    AppID,
+    ResourceType = type,
+    ResourceName = name,
+    ResourceId = id
+| order by AppID, ResourceType
+*/

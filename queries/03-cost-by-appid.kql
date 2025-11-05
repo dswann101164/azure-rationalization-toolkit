@@ -1,0 +1,138 @@
+// ========================================
+// COST ALLOCATION BY APPID
+// ========================================
+// Purpose: Aggregate Azure spending by application identifier
+// Use Case: Chargeback, showback, budgeting, cost optimization
+// Data Source: Cost Management (requires billing reader permissions)
+//
+// NOTE: This query uses the Cost Management API data
+// Alternative: Use FinOps Toolkit + Parquet files for 13+ months history
+// ========================================
+
+// ========================================
+// OPTION 1: Current Month Costs (Cost Management API)
+// ========================================
+Resources
+| join kind=leftouter (
+    CostManagementResources
+    | where type == "microsoft.costmanagement/query"
+    | extend 
+        ResourceId = tostring(properties.resourceId),
+        Cost = todecimal(properties.cost),
+        CostDate = todatetime(properties.date)
+) on $left.id == $right.ResourceId
+| extend 
+    AppID = tostring(tags.AppID),
+    Environment = tostring(tags.Environment),
+    CostCenter = tostring(tags.CostCenter)
+| where isnotempty(AppID)
+| summarize 
+    MonthlySpend = sum(Cost)
+by AppID, Environment, CostCenter
+| order by MonthlySpend desc
+| extend 
+    MonthlySpendFormatted = strcat("$", format_number(MonthlySpend, 0))
+
+// ========================================
+// OPTION 2: Historical Trend (Last 3 Months)
+// ========================================
+/*
+Resources
+| join kind=leftouter (
+    CostManagementResources
+    | where type == "microsoft.costmanagement/query"
+    | extend 
+        ResourceId = tostring(properties.resourceId),
+        Cost = todecimal(properties.cost),
+        CostDate = todatetime(properties.date)
+    | where CostDate >= ago(90d)
+) on $left.id == $right.ResourceId
+| extend 
+    AppID = tostring(tags.AppID),
+    Month = format_datetime(CostDate, "yyyy-MM")
+| where isnotempty(AppID)
+| summarize 
+    MonthlySpend = sum(Cost)
+by AppID, Month
+| order by Month desc, MonthlySpend desc
+*/
+
+// ========================================
+// OPTION 3: Cost by AppID + Resource Type
+// ========================================
+// Useful for identifying expensive resource categories per app
+/*
+Resources
+| join kind=leftouter (
+    CostManagementResources
+    | where type == "microsoft.costmanagement/query"
+    | extend 
+        ResourceId = tostring(properties.resourceId),
+        Cost = todecimal(properties.cost)
+) on $left.id == $right.ResourceId
+| extend 
+    AppID = tostring(tags.AppID),
+    ResourceType = tostring(type)
+| where isnotempty(AppID)
+| summarize 
+    TotalCost = sum(Cost),
+    ResourceCount = count()
+by AppID, ResourceType
+| order by AppID, TotalCost desc
+*/
+
+// ========================================
+// INTERPRETATION GUIDE
+// ========================================
+// Top 20% of AppIDs typically drive 80% of costs (Pareto principle)
+// Focus optimization efforts on high-cost applications
+//
+// RED FLAGS:
+// - AppID = null → untagged resources incurring costs
+// - AppID = "Unknown" → tagging process broken
+// - Unexpected high costs → potential resource sprawl
+//
+// NEXT STEPS:
+// 1. Export to CSV for budget vs. actual analysis
+// 2. Alert on >20% month-over-month increases
+// 3. Build Power BI dashboard with this as a data source
+// ========================================
+
+// ========================================
+// ADVANCED: Untagged Resource Costs
+// ========================================
+// Shows how much money is being spent on ungoverned resources
+/*
+Resources
+| join kind=leftouter (
+    CostManagementResources
+    | where type == "microsoft.costmanagement/query"
+    | extend 
+        ResourceId = tostring(properties.resourceId),
+        Cost = todecimal(properties.cost)
+) on $left.id == $right.ResourceId
+| extend 
+    TagStatus = iff(tags has "AppID", "Tagged", "Untagged")
+| summarize 
+    TotalCost = sum(Cost),
+    ResourceCount = count()
+by TagStatus
+| extend CostFormatted = strcat("$", format_number(TotalCost, 0))
+*/
+
+// ========================================
+// PRODUCTION TIP: Use FinOps Toolkit Instead
+// ========================================
+// For large environments (30K+ resources), the Cost Management API hits limits:
+// - 6-month data retention cap
+// - Slow query performance
+// - Memory issues in Power BI
+//
+// SOLUTION: Azure FinOps Toolkit + Parquet Files
+// - Stores 13+ months of cost history
+// - Sub-3-second query times
+// - Scales to millions of rows
+//
+// Blog post: https://azure-noob.com/blog/scaling-cost-dashboards
+// (Coming soon)
+// ========================================
