@@ -1,0 +1,80 @@
+// Find Orphaned Resources
+//
+// Purpose: Identify resources that exist but have no clear owner or purpose
+// Use Case: Cost optimization - find resources that can potentially be deleted
+// Orphan Indicators:
+//   - No ApplicationID tag
+//   - No Owner/CreatedBy tag
+//   - Resource group has "temp", "test", "demo" in name
+//   - Created > 90 days ago but still untagged
+//
+// How to use:
+// 1. Run this query in Azure Resource Graph Explorer
+// 2. Review results with teams before deleting anything
+// 3. Consider "grace period" notifications before cleanup
+
+Resources
+| where subscriptionId in~ (
+    'YOUR_SUB_ID_1',
+    'YOUR_SUB_ID_2',
+    'YOUR_SUB_ID_3'
+)
+// Resources without ApplicationID or Owner tags
+| where (isempty(tags['ApplicationID']) or isnull(tags['ApplicationID']))
+    and (isempty(tags['Owner']) or isnull(tags['Owner']))
+    and (isempty(tags['CreatedBy']) or isnull(tags['CreatedBy']))
+// Exclude Azure-managed infrastructure
+| where type !startswith 'microsoft.security/'
+| where type !startswith 'microsoft.insights/'
+| where type !startswith 'microsoft.alertsmanagement/'
+| where type !startswith 'microsoft.portal/'
+// Flag suspicious resource group names (likely temporary/test)
+| extend SuspiciousRG = iff(
+    resourceGroup matches regex @'(?i)(temp|test|demo|sandbox|poc|trial|old|deprecated)',
+    '⚠️ Suspicious',
+    '✓ Normal'
+)
+// Calculate age (approximation based on Resource Graph)
+| extend ResourceAge = datetime_diff('day', now(), todatetime(properties.createdTime))
+// Filter for resources older than 90 days (optional - adjust as needed)
+| where ResourceAge > 90 or isnull(ResourceAge)
+// Add cost hint (requires cost data integration - this is a placeholder)
+| extend PotentialSavingsHint = case(
+    type =~ 'microsoft.compute/virtualmachines', 'High',
+    type =~ 'microsoft.sql/servers/databases', 'High',
+    type =~ 'microsoft.storage/storageaccounts', 'Medium',
+    type =~ 'microsoft.network/publicipaddresses', 'Low',
+    'Unknown'
+)
+// Summarize orphaned resources
+| project 
+    subscriptionId,
+    resourceGroup,
+    name,
+    type,
+    location,
+    SuspiciousRG,
+    ResourceAge,
+    PotentialSavingsHint,
+    id
+| order by PotentialSavingsHint desc, ResourceAge desc
+
+// Expected Output Example:
+// subscriptionId | resourceGroup    | name           | type                          | SuspiciousRG      | ResourceAge | PotentialSavingsHint
+// sub-001       | rg-temp-testing  | vm-abandoned   | microsoft.compute/virtualmachines | ⚠️ Suspicious   | 456         | High
+// sub-002       | rg-old-app       | db-unused      | microsoft.sql/servers/databases   | ⚠️ Suspicious   | 234         | High
+// sub-001       | rg-demo-poc      | storage-test   | microsoft.storage/storageaccounts | ⚠️ Suspicious   | 128         | Medium
+
+// Cleanup Workflow:
+// 1. Export results to CSV
+// 2. Send to resource group owners for verification
+// 3. Wait 30 days for response
+// 4. Tag confirmed orphans with "Status: Pending Deletion"
+// 5. Delete after another 14-day grace period
+// 6. Document savings in rationalization report
+
+// Safety Notes:
+// - NEVER auto-delete without human review
+// - Some "orphaned" resources might be critical infrastructure
+// - Check dependencies (NICs, disks, etc.) before VM deletion
+// - Notify teams via email/Slack before any deletions
